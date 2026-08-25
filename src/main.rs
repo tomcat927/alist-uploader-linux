@@ -7,7 +7,11 @@ mod error;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use axum::Router;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::CorsLayer,
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 use crate::services::queue_manager::QueueManager;
 
 #[tokio::main]
@@ -25,11 +29,25 @@ async fn main() {
 
     let state = routes::AppState::new(queue_manager);
 
+    let dist = std::path::Path::new("frontend/dist");
+    let (dist_dir, index_html) = if dist.exists() {
+        (
+            std::path::PathBuf::from("frontend/dist"),
+            std::path::PathBuf::from("frontend/dist/index.html"),
+        )
+    } else {
+        (
+            std::path::PathBuf::from("frontend/public"),
+            std::path::PathBuf::from("frontend/public/index.html"),
+        )
+    };
+    let serve_frontend = ServeDir::new(dist_dir).not_found_service(ServeFile::new(index_html));
+
     let app = Router::new()
         .nest("/api", routes::api_routes(state.clone()))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .fallback_service(routes::serve_frontend());
+        .fallback_service(serve_frontend);
 
     let addr = "0.0.0.0:8080";
     tracing::info!("服务启动于 http://{}", addr);
