@@ -1,0 +1,16 @@
+[Unit]
+Description=Alist Uploader - Web Upload Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/alist-uploader
+ExecStart=/opt/alist-uploader/alist-uploader-linux
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

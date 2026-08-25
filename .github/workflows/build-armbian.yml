@@ -1,0 +1,111 @@
+name: Build Armbian (aarch64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: alist-uploader-linux
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: |
+            aarch64-unknown-linux-gnu
+            aarch64-unknown-linux-musl
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install aarch64 gnu cross-toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Install cargo-zigbuild (for static musl build)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build aarch64-unknown-linux-gnu (glibc)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Build aarch64-unknown-linux-musl (fully static)
+        run: cargo zigbuild --release --target aarch64-unknown-linux-musl
+
+      - name: Strip binaries
+        run: |
+          aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/${{ env.BINARY_NAME }}
+          aarch64-linux-gnu-strip target/aarch64-unknown-linux-musl/release/${{ env.BINARY_NAME }}
+
+      - name: Package gnu (glibc)
+        run: |
+          set -euxo pipefail
+          PKG="alist-uploader-linux-aarch64-gnu"
+          ROOT="package/$PKG"
+          mkdir -p "$ROOT/frontend"
+          cp "target/aarch64-unknown-linux-gnu/release/$BINARY_NAME" "$ROOT/"
+          cp -r frontend/dist "$ROOT/frontend/"
+          cp deploy/alist-uploader.service "$ROOT/"
+          cp deploy/install.sh "$ROOT/"
+          cp README.md "$ROOT/"
+          chmod +x "$ROOT/$BINARY_NAME" "$ROOT/install.sh"
+          tar -C package -czf "package/$PKG.tar.gz" "$PKG"
+
+      - name: Package musl (static)
+        run: |
+          set -euxo pipefail
+          PKG="alist-uploader-linux-aarch64-musl"
+          ROOT="package/$PKG"
+          mkdir -p "$ROOT/frontend"
+          cp "target/aarch64-unknown-linux-musl/release/$BINARY_NAME" "$ROOT/"
+          cp -r frontend/dist "$ROOT/frontend/"
+          cp deploy/alist-uploader.service "$ROOT/"
+          cp deploy/install.sh "$ROOT/"
+          cp README.md "$ROOT/"
+          chmod +x "$ROOT/$BINARY_NAME" "$ROOT/install.sh"
+          tar -C package -czf "package/$PKG.tar.gz" "$PKG"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: alist-uploader-linux-aarch64
+          path: package/*.tar.gz
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: package/*.tar.gz
